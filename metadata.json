@@ -1,0 +1,7 @@
+{
+  "name": "Bustracker-Alpha-Driver-App",
+  "description": "Real-time bus tracking dashboard for drivers with automated GPS telemetry and AI-assisted status reporting. This is the Android version of the app",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
