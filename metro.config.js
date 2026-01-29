@@ -1,3 +1,11 @@
 const { getDefaultConfig } = require('expo/metro-config');
 
-module.exports = getDefaultConfig(__dirname);
+const config = getDefaultConfig(__dirname);
+
+// Exclude node_modules from TypeScript processing
+config.resolver.blockList = [
+  ...config.resolver.blockList || [],
+  /node_modules\/expo-modules-core\/src\/.*/,
+];
+
+module.exports = config;
