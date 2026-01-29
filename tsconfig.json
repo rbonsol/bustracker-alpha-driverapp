@@ -9,13 +9,10 @@
       "DOM",
       "DOM.Iterable"
     ],
+    "allowSyntheticDefaultImports": true,
     "skipLibCheck": true,
-    "types": [
-      "node"
-    ],
-    "moduleResolution": "bundler",
+    "moduleResolution": "node",
     "isolatedModules": true,
-    "moduleDetection": "force",
     "allowJs": true,
     "jsx": "react-jsx",
     "paths": {
@@ -23,12 +20,12 @@
         "./*"
       ]
     },
-    "allowImportingTsExtensions": true,
     "noEmit": true
   },
   "exclude": [
     "node_modules",
     "dist",
     "build"
-  ]
+  ],
+  "extends": "expo/tsconfig.base"
 }

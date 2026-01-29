@@ -41,9 +41,9 @@ const getDistanceInMeters = (lat1: number, lon1: number, lat2: number, lon2: num
 };
 
 // Helper to get stored config or return default
-const getStoredConfig = () => {
+const getStoredConfig = async () => {
   try {
-    const stored = localStorage.getItem('omni_firebase_config');
+    const stored = await AsyncStorage.getItem('omni_firebase_config');
     if (stored) return JSON.parse(stored);
   } catch (e) {
     console.error("Failed to parse stored config", e);
@@ -53,8 +53,7 @@ const getStoredConfig = () => {
 
 const App: React.FC = () => {
   // Trip Configuration State
-  // PERSISTENCE: Load busId from storage so driver doesn't re-type it
-  const [busId, setBusId] = useState(() => localStorage.getItem('omni_bus_id') || "");
+  const [busId, setBusId] = useState("");
   const [direction, setDirection] = useState<'northbound' | 'southbound'>('northbound');
   const [isSetupComplete, setIsSetupComplete] = useState(false);
 
@@ -86,7 +85,7 @@ const App: React.FC = () => {
   const [showConfigModal, setShowConfigModal] = useState(false);
   
   // Config
-  const [fbConfig, setFbConfig] = useState(getStoredConfig());
+  const [fbConfig, setFbConfig] = useState(DEFAULT_CONFIG);
 
   // Logging Helper
   const addLog = useCallback((type: LogEntry['type'], message: string) => {
@@ -98,34 +97,41 @@ const App: React.FC = () => {
     }]);
   }, []);
 
+  // Load persisted data on mount
+  useEffect(() => {
+    const loadStoredData = async () => {
+      try {
+        const storedBusId = await AsyncStorage.getItem('omni_bus_id');
+        if (storedBusId) setBusId(storedBusId);
+        
+        const storedConfig = await AsyncStorage.getItem('omni_firebase_config');
+        if (storedConfig) setFbConfig(JSON.parse(storedConfig));
+      } catch (e) {
+        console.error('Failed to load stored data', e);
+      }
+    };
+    loadStoredData();
+  }, []);
+
   // PERSISTENCE: Save busId when changed
   useEffect(() => {
-    localStorage.setItem('omni_bus_id', busId);
+    AsyncStorage.setItem('omni_bus_id', busId);
   }, [busId]);
 
   // ANDROID BACK BUTTON HANDLING
-  // Trap the back button to prevent accidental app exit during tracking
   useEffect(() => {
-    if (isSetupComplete) {
-      // Push a dummy state to the history stack
-      window.history.pushState({ screen: 'dashboard' }, "", window.location.href);
+    const handleBackPress = () => {
+      if (isTracking) {
+        setStatusMessage("Stop tracking first!");
+        addLog('warning', "Back button pressed while tracking");
+        return true; // Prevent default back behavior
+      }
+      return false; // Allow default back behavior
+    };
 
-      const handlePopState = (event: PopStateEvent) => {
-        if (isTracking) {
-          // If tracking, prevent going back. Push state again.
-          window.history.pushState({ screen: 'dashboard' }, "", window.location.href);
-          setStatusMessage("Stop tracking first!");
-          addLog('warning', "Back button pressed while tracking");
-        } else {
-          // If not tracking, allow going back to setup
-          setIsSetupComplete(false);
-        }
-      };
-
-      window.addEventListener('popstate', handlePopState);
-      return () => window.removeEventListener('popstate', handlePopState);
-    }
-  }, [isSetupComplete, isTracking, addLog]);
+    const subscription = BackHandler.addEventListener('hardwareBackPress', handleBackPress);
+    return () => subscription.remove();
+  }, [isTracking, addLog]);
 
 
   // Initialize Firebase on mount or config change
@@ -171,22 +177,14 @@ const App: React.FC = () => {
       wakeLockRef.current = null;
     }
 
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && isTracking) {
-        requestWakeLock();
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
       if (interval) clearInterval(interval);
       wakeLockRef.current?.release();
     };
   }, [isTracking, requestWakeLock]);
 
-  const saveConfig = () => {
-    localStorage.setItem('omni_firebase_config', JSON.stringify(fbConfig));
+  const saveConfig = async () => {
+    await AsyncStorage.setItem('omni_firebase_config', JSON.stringify(fbConfig));
     setShowConfigModal(false);
     setStatusMessage("Config Saved");
     addLog('success', 'Configuration updated');
@@ -200,18 +198,11 @@ const App: React.FC = () => {
     const updateBattery = async () => {
       try {
         const level = await Battery.getBatteryLevelAsync();
-        const isCharging = await Battery.isBatteryChargingAsync();
+        const isChargingStatus = await (Battery as any).isChargingAsync?.() ?? false;
         setBatteryLevel(level * 100);
-        setIsCharging(isCharging);
+        setIsCharging(isChargingStatus);
       } catch (error) {
         console.warn('Battery API not available:', error);
-        // Fallback to web API if available
-        if (navigator.getBattery) {
-          navigator.getBattery().then((battery: any) => {
-            setBatteryLevel(battery.level * 100);
-            setIsCharging(battery.charging);
-          });
-        }
       }
     };
     
@@ -225,7 +216,7 @@ const App: React.FC = () => {
   }, []);
 
   // Core Logic: Process Position Update
-  const processPosition = useCallback(async (position: GeolocationPosition) => {
+  const processPosition = useCallback(async (position: any) => {
       const { latitude, longitude, speed, heading } = position.coords;
       
       // Update UI immediately for responsiveness
@@ -300,7 +291,7 @@ const App: React.FC = () => {
   // Start/Stop Tracking with watchPosition
   useEffect(() => {
     if (isTracking) {
-      if (!navigator.geolocation) {
+      if (!(navigator as any).geolocation) {
         setStatusMessage("GPS Not Supported");
         addLog('error', 'Navigator.geolocation missing');
         return;
@@ -309,7 +300,7 @@ const App: React.FC = () => {
       addLog('info', 'Starting GPS Watch...');
       
       // watchPosition is better for Android background tracking than setInterval
-      watchIdRef.current = navigator.geolocation.watchPosition(
+      watchIdRef.current = (navigator as any).geolocation.watchPosition(
         processPosition,
         (error) => {
           setStatusMessage(`GPS: ${error.message}`);
@@ -324,7 +315,7 @@ const App: React.FC = () => {
       );
     } else {
       if (watchIdRef.current !== null) {
-        navigator.geolocation.clearWatch(watchIdRef.current);
+        (navigator as any).geolocation.clearWatch(watchIdRef.current);
         watchIdRef.current = null;
         setStatusMessage("Tracking Paused");
         setStatusType('normal');
@@ -334,7 +325,7 @@ const App: React.FC = () => {
 
     return () => {
       if (watchIdRef.current !== null) {
-        navigator.geolocation.clearWatch(watchIdRef.current);
+        (navigator as any).geolocation.clearWatch(watchIdRef.current);
       }
     };
   }, [isTracking, processPosition, addLog]);
@@ -373,268 +364,709 @@ const App: React.FC = () => {
   // --- TRIP SETUP SCREEN ---
   if (!isSetupComplete) {
     return (
-      <div 
-        className="h-screen w-full bg-slate-950 flex flex-col p-6 items-center justify-center space-y-8 select-none"
-        onContextMenu={(e) => e.preventDefault()}
-      >
-        <div className="text-center space-y-2">
-           <div className="text-xs text-slate-500 font-mono tracking-widest uppercase">Driver App</div>
-           <h1 className="text-3xl font-bold text-white">OmniTrack</h1>
-           <p className="text-slate-400">Configure your trip to start</p>
-        </div>
+      <SafeAreaView style={styles.setupContainer}>
+        <ScrollView contentContainerStyle={styles.setupContent}>
+          <View style={styles.setupHeader}>
+            <Text style={styles.setupSubtitle}>Driver App</Text>
+            <Text style={styles.setupTitle}>OmniTrack</Text>
+            <Text style={styles.setupDescription}>Configure your trip to start</Text>
+          </View>
 
-        <div className="w-full max-w-sm space-y-6">
-           <div className="space-y-2">
-             <label className="text-xs text-slate-500 font-bold uppercase">Bus Number / ID</label>
-             <input 
-               type="text" 
-               placeholder="e.g., BUS-042" 
-               value={busId}
-               onChange={(e) => setBusId(e.target.value.toUpperCase())}
-               className="w-full bg-slate-900 border border-slate-700 rounded-xl p-4 text-center text-2xl font-mono font-bold text-white focus:border-emerald-500 focus:outline-none placeholder-slate-700 uppercase"
-             />
-           </div>
+          <View style={styles.setupForm}>
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Bus Number / ID</Text>
+              <TextInput
+                style={styles.busIdInput}
+                placeholder="e.g., BUS-042"
+                value={busId}
+                onChangeText={(text) => setBusId(text.toUpperCase())}
+                placeholderTextColor="#64748b"
+                maxLength={20}
+              />
+            </View>
 
-           <div className="space-y-2">
-             <label className="text-xs text-slate-500 font-bold uppercase">Direction</label>
-             <div className="grid grid-cols-2 gap-3">
-               <button 
-                 onClick={() => setDirection('northbound')}
-                 className={`p-4 rounded-xl font-bold border-2 transition-all active:scale-95 ${direction === 'northbound' ? 'border-emerald-500 bg-emerald-900/20 text-emerald-400' : 'border-slate-800 bg-slate-900 text-slate-500'}`}
-               >
-                 Northbound
-               </button>
-               <button 
-                 onClick={() => setDirection('southbound')}
-                 className={`p-4 rounded-xl font-bold border-2 transition-all active:scale-95 ${direction === 'southbound' ? 'border-emerald-500 bg-emerald-900/20 text-emerald-400' : 'border-slate-800 bg-slate-900 text-slate-500'}`}
-               >
-                 Southbound
-               </button>
-             </div>
-           </div>
-        </div>
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Direction</Text>
+              <View style={styles.directionGrid}>
+                <TouchableOpacity
+                  style={[styles.directionBtn, direction === 'northbound' && styles.directionBtnActive]}
+                  onPress={() => setDirection('northbound')}
+                >
+                  <Text style={[styles.directionBtnText, direction === 'northbound' && styles.directionBtnTextActive]}>
+                    Northbound
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.directionBtn, direction === 'southbound' && styles.directionBtnActive]}
+                  onPress={() => setDirection('southbound')}
+                >
+                  <Text style={[styles.directionBtnText, direction === 'southbound' && styles.directionBtnTextActive]}>
+                    Southbound
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
 
-        <button 
-          onClick={() => setIsSetupComplete(true)}
-          disabled={!busId || busId.length < 3}
-          className="w-full max-w-sm py-4 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-30 disabled:cursor-not-allowed text-slate-950 rounded-xl font-bold text-lg shadow-lg shadow-emerald-900/20 active:scale-95 transition-transform"
-        >
-          START SHIFT
-        </button>
+          <TouchableOpacity
+            style={[styles.startBtn, (!busId || busId.length < 3) && styles.startBtnDisabled]}
+            disabled={!busId || busId.length < 3}
+            onPress={() => setIsSetupComplete(true)}
+          >
+            <Text style={styles.startBtnText}>START SHIFT</Text>
+          </TouchableOpacity>
 
-        <div className="absolute bottom-6">
-           <button onClick={() => setShowConfigModal(true)} className="text-slate-600 text-sm underline p-4">Server Settings</button>
-        </div>
+          <TouchableOpacity
+            style={styles.settingsBtn}
+            onPress={() => setShowConfigModal(true)}
+          >
+            <Text style={styles.settingsBtnText}>Server Settings</Text>
+          </TouchableOpacity>
+        </ScrollView>
 
         {/* Config Modal */}
-        {showConfigModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4">
-             <div className="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-sm p-6">
-                <h3 className="text-white font-bold mb-4">Firebase Config</h3>
-                <div className="space-y-3 mb-4">
-                    <div>
-                      <label className="text-xs text-slate-500 block mb-1">Database URL</label>
-                      <input className="w-full bg-slate-950 border border-slate-800 rounded p-3 text-sm text-white" value={fbConfig.databaseURL} onChange={e => setFbConfig({...fbConfig, databaseURL: e.target.value})} />
-                    </div>
-                    <div>
-                      <label className="text-xs text-slate-500 block mb-1">API Key</label>
-                      <input className="w-full bg-slate-950 border border-slate-800 rounded p-3 text-sm text-white" value={fbConfig.apiKey} onChange={e => setFbConfig({...fbConfig, apiKey: e.target.value})} />
-                    </div>
-                </div>
-                <div className="flex justify-end gap-2">
-                    <button onClick={() => setShowConfigModal(false)} className="px-4 py-2 text-slate-400">Cancel</button>
-                    <button onClick={saveConfig} className="px-4 py-2 bg-emerald-600 text-white rounded">Save</button>
-                </div>
-             </div>
-          </div>
-        )}
-      </div>
+        <Modal
+          visible={showConfigModal}
+          transparent={true}
+          animationType="fade"
+          onRequestClose={() => setShowConfigModal(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.configModal}>
+              <Text style={styles.configTitle}>Firebase Config</Text>
+              <View style={styles.configInputGroup}>
+                <Text style={styles.configLabel}>Database URL</Text>
+                <TextInput
+                  style={styles.configInput}
+                  value={fbConfig.databaseURL}
+                  onChangeText={(text) => setFbConfig({...fbConfig, databaseURL: text})}
+                  placeholderTextColor="#64748b"
+                />
+              </View>
+              <View style={styles.configInputGroup}>
+                <Text style={styles.configLabel}>API Key</Text>
+                <TextInput
+                  style={styles.configInput}
+                  value={fbConfig.apiKey}
+                  onChangeText={(text) => setFbConfig({...fbConfig, apiKey: text})}
+                  placeholderTextColor="#64748b"
+                />
+              </View>
+              <View style={styles.configButtonGroup}>
+                <TouchableOpacity
+                  style={styles.cancelBtn}
+                  onPress={() => setShowConfigModal(false)}
+                >
+                  <Text style={styles.cancelBtnText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.saveBtn}
+                  onPress={saveConfig}
+                >
+                  <Text style={styles.saveBtnText}>Save</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+      </SafeAreaView>
     );
   }
 
   // --- DASHBOARD SCREEN ---
   return (
-    <div 
-      className="h-screen w-full bg-slate-950 flex flex-col overflow-hidden relative touch-none select-none"
-      onContextMenu={(e) => e.preventDefault()}
-    >
+    <SafeAreaView style={styles.dashboardContainer}>
+      <StatusBar barStyle="light-content" backgroundColor="#0f172a" />
       
       {/* App Bar */}
-      <div className="flex-none bg-slate-900 border-b border-slate-800 p-4 flex justify-between items-center z-10 safe-top">
-        <div onClick={() => setShowLogs(!showLogs)}>
-           <div className="text-xs text-slate-500 font-mono tracking-widest uppercase">
-             {busId} • <span className="text-emerald-500">{direction.toUpperCase()}</span>
-           </div>
-           <div className="font-bold text-slate-100 text-lg flex items-center gap-2">
-             OmniTrack
-             {isTracking && <span className="animate-pulse w-2 h-2 rounded-full bg-red-500"></span>}
-           </div>
-        </div>
-        <button onClick={() => setIsSetupComplete(false)} className="px-4 py-2 rounded-lg bg-slate-800 text-slate-400 text-xs font-bold border border-slate-700 active:bg-slate-700">
-          END SHIFT
-        </button>
-      </div>
+      <View style={styles.appBar}>
+        <TouchableOpacity onPress={() => setShowLogs(!showLogs)}>
+          <Text style={styles.busInfo}>{busId} • {direction === 'northbound' ? 'NB' : 'SB'}</Text>
+          <View style={styles.titleRow}>
+            <Text style={styles.appTitle}>OmniTrack</Text>
+            {isTracking && <View style={styles.trackingDot} />}
+          </View>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.endShiftBtn}
+          onPress={() => setIsSetupComplete(false)}
+        >
+          <Text style={styles.endShiftBtnText}>END SHIFT</Text>
+        </TouchableOpacity>
+      </View>
 
-      {/* Main Content Area */}
-      <div className="flex-grow flex flex-col p-4 space-y-4 overflow-y-auto">
-        
+      <ScrollView style={styles.content} contentContainerStyle={styles.contentContainer}>
         {/* Status Banner */}
-        <div className={`flex items-center justify-between p-4 rounded-xl border ${
-            statusType === 'error' ? 'bg-red-900/20 border-red-800/50 text-red-400' :
-            statusType === 'success' ? 'bg-emerald-900/20 border-emerald-800/50 text-emerald-400' :
-            'bg-slate-900 border-slate-800 text-slate-400'
-        } transition-colors duration-300`}>
-             <div className="flex items-center gap-3 overflow-hidden">
-                <div className={`w-3 h-3 shrink-0 rounded-full ${isTracking ? 'animate-pulse bg-emerald-500' : 'bg-slate-600'}`}></div>
-                <span className="font-mono text-sm font-bold uppercase truncate">{statusMessage}</span>
-             </div>
-        </div>
+        <View style={[styles.statusBanner, statusType === 'error' ? styles.statusError : statusType === 'success' ? styles.statusSuccess : styles.statusNormal]}>
+          <View style={[styles.statusDot, {backgroundColor: isTracking ? '#10b981' : '#475569'}]} />
+          <Text style={styles.statusText}>{statusMessage}</Text>
+        </View>
 
-        {/* Speedometer (Hero Metric) */}
-        <div className="flex-none bg-slate-900 rounded-3xl border border-slate-800 p-6 flex flex-col items-center justify-center py-8 shadow-inner">
-            <div className="text-slate-500 text-xs font-bold uppercase tracking-widest mb-2">Current Speed</div>
-            <div className="flex items-baseline gap-2">
-                <span className="text-8xl font-mono font-bold text-white tracking-tighter">
-                    {((currentSpeed || 0) * 3.6).toFixed(0)}
-                </span>
-                <span className="text-xl text-slate-500 font-medium">KM/H</span>
-            </div>
-        </div>
+        {/* Speedometer */}
+        <View style={styles.speedometer}>
+          <Text style={styles.speedLabel}>Current Speed</Text>
+          <View style={styles.speedValue}>
+            <Text style={styles.speedNumber}>{((currentSpeed || 0) * 3.6).toFixed(0)}</Text>
+            <Text style={styles.speedUnit}>KM/H</Text>
+          </View>
+        </View>
 
-        {/* Debug Logs (Toggleable) */}
-        {showLogs && (
-           <div className="mb-2">
-              <StatusLog logs={logs} />
-           </div>
-        )}
+        {/* Debug Logs */}
+        {showLogs && <StatusLog logs={logs} />}
 
-        {/* Secondary Metrics Grid */}
-        <div className="grid grid-cols-2 gap-3">
-             <TelemetryCard 
-                label="Last Sync" 
-                value={lastSentTime} 
-                icon="fa-clock" 
-                unit=""
-                color="default"
-            />
-            <TelemetryCard 
-                label="Battery" 
-                value={Math.round(batteryLevel)} 
-                unit="%" 
-                icon={isCharging ? "fa-bolt" : "fa-battery-half"} 
-                color={batteryLevel < 20 ? 'danger' : 'success'} 
-            />
-            <TelemetryCard 
-                label="Bus ID" 
-                value={busId}
-                icon="fa-bus" 
-                color="default"
-            />
-            <TelemetryCard 
-                label="Route" 
-                value={direction === 'northbound' ? 'NB' : 'SB'} 
-                icon="fa-route" 
-                color="default"
-            />
-        </div>
+        {/* Metrics Grid */}
+        <View style={styles.metricsGrid}>
+          <TelemetryCard label="Last Sync" value={lastSentTime} unit="" color="default" />
+          <TelemetryCard label="Battery" value={Math.round(batteryLevel)} unit="%" color={batteryLevel < 20 ? 'danger' : 'success'} />
+          <TelemetryCard label="Bus ID" value={busId} color="default" />
+          <TelemetryCard label="Route" value={direction === 'northbound' ? 'NB' : 'SB'} color="default" />
+        </View>
 
         {!isTracking && (
-          <div className="p-4 bg-amber-900/20 border border-amber-900/50 rounded-xl">
-             <p className="text-amber-200 text-xs text-center font-bold">
-               ⚠️ KEEP SCREEN ON AND APP OPEN WHILE DRIVING
-             </p>
-          </div>
+          <View style={styles.warningBanner}>
+            <Text style={styles.warningText}>⚠️ KEEP SCREEN ON AND APP OPEN WHILE DRIVING</Text>
+          </View>
         )}
-
-      </div>
+      </ScrollView>
 
       {/* Footer Controls */}
-      <div className="flex-none p-4 pb-8 bg-slate-900 border-t border-slate-800 flex flex-col gap-3 safe-bottom">
-          
-          <button
-            onClick={toggleTracking}
-            className={`w-full py-6 rounded-xl font-bold text-2xl shadow-lg transform active:scale-[0.98] transition-all flex items-center justify-center gap-3 ${
-                isTracking 
-                ? 'bg-red-500 hover:bg-red-600 text-white shadow-red-900/20' 
-                : 'bg-emerald-500 hover:bg-emerald-600 text-slate-950 shadow-emerald-900/20'
-            }`}
-            >
-            <i className={`fas ${isTracking ? 'fa-stop-circle' : 'fa-play-circle'} text-3xl`}></i>
+      <View style={styles.footer}>
+        <TouchableOpacity
+          style={[styles.trackingBtn, isTracking && styles.trackingBtnActive]}
+          onPress={toggleTracking}
+        >
+          <Text style={styles.trackingBtnText}>
             {isTracking ? 'STOP TRACKING' : 'START TRACKING'}
-          </button>
+          </Text>
+        </TouchableOpacity>
 
-          <button
-            onClick={() => setShowIncidentModal(true)}
-            className="w-full py-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold border border-slate-700 transition flex items-center justify-center gap-2 active:bg-slate-700"
-          >
-            <i className="fas fa-bullhorn text-amber-400"></i>
-            Broadcast Incident
-          </button>
-      </div>
+        <TouchableOpacity
+          style={styles.incidentBtn}
+          onPress={() => setShowIncidentModal(true)}
+        >
+          <Text style={styles.incidentBtnText}>Broadcast Incident</Text>
+        </TouchableOpacity>
+      </View>
 
       {/* Incident Modal */}
-      {showIncidentModal && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-slate-900 border-t sm:border border-slate-700 rounded-t-2xl sm:rounded-2xl w-full max-w-md overflow-hidden shadow-2xl p-6 pb-10 sm:pb-6">
-              <div className="flex justify-between items-center mb-6">
-                <h2 className="text-xl font-bold text-white flex items-center gap-2">
-                  <i className="fas fa-robot text-emerald-400"></i> AI Assistant
-                </h2>
-                <button onClick={() => setShowIncidentModal(false)} className="w-10 h-10 rounded-full bg-slate-800 text-slate-400 flex items-center justify-center active:bg-slate-700">
-                  <i className="fas fa-times"></i>
-                </button>
-              </div>
-              
-              {!generatedMsg ? (
-                  <>
-                    <p className="text-slate-400 text-sm mb-3">What's happening?</p>
-                    <textarea
-                        value={incidentText}
-                        onChange={(e) => setIncidentText(e.target.value)}
-                        placeholder="e.g. Flat tire, traffic delayed 10m..."
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg p-4 text-white text-lg focus:border-emerald-500 focus:outline-none min-h-[120px] mb-4"
-                    />
-                    <button
-                        onClick={handleAiGeneration}
-                        disabled={isGenerating || !incidentText}
-                        className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl font-bold text-lg active:scale-[0.98] transition-transform"
-                    >
-                        {isGenerating ? <i className="fas fa-spinner fa-spin"></i> : 'Generate Alert'}
-                    </button>
-                  </>
-              ) : (
-                  <div className="space-y-4">
-                      <div className="bg-emerald-900/20 border border-emerald-900/50 p-4 rounded-lg">
-                        <p className="text-emerald-100 text-lg leading-relaxed">"{generatedMsg}"</p>
-                      </div>
-                      <div className="grid grid-cols-2 gap-3">
-                        <button 
-                            onClick={() => {
-                            navigator.clipboard.writeText(generatedMsg);
-                            setShowIncidentModal(false);
-                            setGeneratedMsg("");
-                            setStatusMessage("Copied to Clipboard");
-                            setStatusType("success");
-                            }}
-                            className="py-4 bg-slate-800 text-white rounded-lg font-semibold active:bg-slate-700"
-                        >
-                            Copy
-                        </button>
-                        <button 
-                             onClick={() => setGeneratedMsg("")}
-                             className="py-4 bg-emerald-600 text-slate-900 rounded-lg font-bold active:bg-emerald-500"
-                        >
-                            New
-                        </button>
-                      </div>
-                  </div>
-              )}
-          </div>
-        </div>
-      )}
+      <Modal
+        visible={showIncidentModal}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setShowIncidentModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.incidentModal}>
+            <View style={styles.incidentHeader}>
+              <Text style={styles.incidentTitle}>AI Assistant</Text>
+              <TouchableOpacity onPress={() => setShowIncidentModal(false)}>
+                <Text style={styles.closeBtn}>✕</Text>
+              </TouchableOpacity>
+            </View>
 
-    </div>
+            {!generatedMsg ? (
+              <>
+                <Text style={styles.incidentPrompt}>What's happening?</Text>
+                <TextInput
+                  style={styles.incidentInput}
+                  value={incidentText}
+                  onChangeText={setIncidentText}
+                  placeholder="e.g. Flat tire, traffic delayed 10m..."
+                  placeholderTextColor="#64748b"
+                  multiline
+                  numberOfLines={4}
+                />
+                <TouchableOpacity
+                  style={[styles.generateBtn, isGenerating && styles.generateBtnDisabled]}
+                  onPress={handleAiGeneration}
+                  disabled={isGenerating || !incidentText}
+                >
+                  <Text style={styles.generateBtnText}>
+                    {isGenerating ? 'Generating...' : 'Generate Alert'}
+                  </Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <>
+                <View style={styles.generatedMsgBox}>
+                  <Text style={styles.generatedMsg}>"{generatedMsg}"</Text>
+                </View>
+                <View style={styles.incidentActionGrid}>
+                  <TouchableOpacity
+                    style={styles.copyBtn}
+                    onPress={() => {
+                      // Copy to clipboard - would need Share API or clipboard library
+                      setShowIncidentModal(false);
+                      setGeneratedMsg("");
+                      setStatusMessage("Copied to Clipboard");
+                      setStatusType("success");
+                    }}
+                  >
+                    <Text style={styles.copyBtnText}>Copy</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.newBtn}
+                    onPress={() => setGeneratedMsg("")}
+                  >
+                    <Text style={styles.newBtnText}>New</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
+    </SafeAreaView>
   );
 };
+
+const styles = StyleSheet.create({
+  // Setup Screen
+  setupContainer: {
+    flex: 1,
+    backgroundColor: '#0f172a',
+  },
+  setupContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  setupHeader: {
+    alignItems: 'center',
+    marginBottom: 48,
+  },
+  setupSubtitle: {
+    fontSize: 12,
+    color: '#64748b',
+    fontWeight: '600',
+    letterSpacing: 2,
+    marginBottom: 8,
+  },
+  setupTitle: {
+    fontSize: 32,
+    fontWeight: 'bold',
+    color: '#fff',
+    marginBottom: 8,
+  },
+  setupDescription: {
+    fontSize: 14,
+    color: '#94a3b8',
+  },
+  setupForm: {
+    width: '100%',
+    maxWidth: 340,
+    marginBottom: 32,
+  },
+  formGroup: {
+    marginBottom: 24,
+  },
+  formLabel: {
+    fontSize: 11,
+    color: '#64748b',
+    fontWeight: '700',
+    letterSpacing: 1,
+    marginBottom: 8,
+  },
+  busIdInput: {
+    backgroundColor: '#1e293b',
+    borderWidth: 1,
+    borderColor: '#475569',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#fff',
+    textAlign: 'center',
+  },
+  directionGrid: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  directionBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#334155',
+    backgroundColor: '#1e293b',
+    alignItems: 'center',
+  },
+  directionBtnActive: {
+    borderColor: '#10b981',
+    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+  },
+  directionBtnText: {
+    fontWeight: '600',
+    color: '#64748b',
+    fontSize: 14,
+  },
+  directionBtnTextActive: {
+    color: '#10b981',
+  },
+  startBtn: {
+    width: '100%',
+    maxWidth: 340,
+    paddingVertical: 16,
+    backgroundColor: '#10b981',
+    borderRadius: 12,
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  startBtnDisabled: {
+    opacity: 0.3,
+  },
+  startBtnText: {
+    color: '#0f172a',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  settingsBtn: {
+    padding: 12,
+  },
+  settingsBtnText: {
+    color: '#475569',
+    fontSize: 13,
+    textDecorationLine: 'underline',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
+  },
+  configModal: {
+    backgroundColor: '#1e293b',
+    borderWidth: 1,
+    borderColor: '#334155',
+    borderRadius: 12,
+    padding: 24,
+    width: '100%',
+    maxWidth: 320,
+  },
+  configTitle: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 16,
+  },
+  configInputGroup: {
+    marginBottom: 16,
+  },
+  configLabel: {
+    fontSize: 11,
+    color: '#64748b',
+    marginBottom: 8,
+  },
+  configInput: {
+    backgroundColor: '#0f172a',
+    borderWidth: 1,
+    borderColor: '#334155',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: '#fff',
+    fontSize: 14,
+  },
+  configButtonGroup: {
+    flexDirection: 'row',
+    gap: 8,
+    justifyContent: 'flex-end',
+  },
+  cancelBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  cancelBtnText: {
+    color: '#64748b',
+    fontSize: 14,
+  },
+  saveBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: '#059669',
+    borderRadius: 6,
+  },
+  saveBtnText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  // Dashboard
+  dashboardContainer: {
+    flex: 1,
+    backgroundColor: '#0f172a',
+  },
+  appBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#1e293b',
+    borderBottomWidth: 1,
+    borderBottomColor: '#334155',
+  },
+  busInfo: {
+    fontSize: 11,
+    color: '#64748b',
+    fontWeight: '600',
+    letterSpacing: 1,
+    marginBottom: 4,
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  appTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#e2e8f0',
+  },
+  trackingDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#ef4444',
+  },
+  endShiftBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: '#334155',
+    borderWidth: 1,
+    borderColor: '#475569',
+    borderRadius: 8,
+  },
+  endShiftBtnText: {
+    color: '#94a3b8',
+    fontSize: 11,
+    fontWeight: 'bold',
+  },
+  content: {
+    flex: 1,
+  },
+  contentContainer: {
+    padding: 16,
+    gap: 16,
+  },
+  statusBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    gap: 12,
+  },
+  statusNormal: {
+    backgroundColor: '#1e293b',
+    borderColor: '#334155',
+  },
+  statusError: {
+    backgroundColor: 'rgba(127, 29, 29, 0.2)',
+    borderColor: 'rgba(153, 27, 27, 0.5)',
+  },
+  statusSuccess: {
+    backgroundColor: 'rgba(22, 101, 52, 0.2)',
+    borderColor: 'rgba(21, 128, 61, 0.5)',
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  statusText: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: '#94a3b8',
+    textTransform: 'uppercase',
+  },
+  speedometer: {
+    backgroundColor: '#1e293b',
+    borderWidth: 1,
+    borderColor: '#334155',
+    borderRadius: 24,
+    paddingVertical: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  speedLabel: {
+    fontSize: 11,
+    color: '#64748b',
+    fontWeight: '600',
+    letterSpacing: 1,
+    marginBottom: 8,
+  },
+  speedValue: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 8,
+  },
+  speedNumber: {
+    fontSize: 56,
+    fontWeight: 'bold',
+    color: '#fff',
+  },
+  speedUnit: {
+    fontSize: 16,
+    color: '#64748b',
+    fontWeight: '500',
+  },
+  metricsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    justifyContent: 'space-between',
+  },
+  warningBanner: {
+    backgroundColor: 'rgba(120, 53, 15, 0.2)',
+    borderWidth: 1,
+    borderColor: 'rgba(180, 83, 9, 0.5)',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  warningText: {
+    color: '#fde68a',
+    fontSize: 12,
+    fontWeight: 'bold',
+    textAlign: 'center',
+  },
+  footer: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    paddingBottom: 24,
+    backgroundColor: '#1e293b',
+    borderTopWidth: 1,
+    borderTopColor: '#334155',
+    gap: 12,
+  },
+  trackingBtn: {
+    paddingVertical: 20,
+    borderRadius: 12,
+    backgroundColor: '#10b981',
+    alignItems: 'center',
+  },
+  trackingBtnActive: {
+    backgroundColor: '#ef4444',
+  },
+  trackingBtnText: {
+    color: '#0f172a',
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  incidentBtn: {
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: '#334155',
+    borderWidth: 1,
+    borderColor: '#475569',
+    alignItems: 'center',
+  },
+  incidentBtnText: {
+    color: '#cbd5e1',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  incidentModal: {
+    backgroundColor: '#1e293b',
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    padding: 24,
+    paddingBottom: 32,
+    maxHeight: '80%',
+  },
+  incidentHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  incidentTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#fff',
+  },
+  closeBtn: {
+    fontSize: 24,
+    color: '#64748b',
+  },
+  incidentPrompt: {
+    color: '#94a3b8',
+    fontSize: 14,
+    marginBottom: 12,
+  },
+  incidentInput: {
+    backgroundColor: '#0f172a',
+    borderWidth: 1,
+    borderColor: '#334155',
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    color: '#fff',
+    fontSize: 14,
+    textAlignVertical: 'top',
+    minHeight: 100,
+    marginBottom: 16,
+  },
+  generateBtn: {
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: '#059669',
+    alignItems: 'center',
+  },
+  generateBtnDisabled: {
+    opacity: 0.5,
+  },
+  generateBtnText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  generatedMsgBox: {
+    backgroundColor: 'rgba(22, 101, 52, 0.2)',
+    borderWidth: 1,
+    borderColor: 'rgba(21, 128, 61, 0.5)',
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    marginBottom: 16,
+  },
+  generatedMsg: {
+    color: '#d1fae5',
+    fontSize: 16,
+    lineHeight: 24,
+  },
+  incidentActionGrid: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  copyBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    backgroundColor: '#334155',
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  copyBtnText: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  newBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    backgroundColor: '#059669',
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  newBtnText: {
+    color: '#0f172a',
+    fontWeight: 'bold',
+  },
+});
 
 export default App;

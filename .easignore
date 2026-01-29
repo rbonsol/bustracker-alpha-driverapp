@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+.expo/
+.expo-shared/
+dist/
+build/
+
+# Build artifacts
+*.apk
+*.aab
+*.eas/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Development
+npm-debug.log
+yarn-error.log
+
+# Backups from migration
+backup/
+vite.config.ts
+

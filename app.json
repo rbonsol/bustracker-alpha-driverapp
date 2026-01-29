@@ -4,10 +4,10 @@
     "slug": "bustracker-driver",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/freepik.png",
     "userInterfaceStyle": "dark",
     "splash": {
-      "image": "./assets/splash.png",
+      "image": "./assets/freepik.png",
       "resizeMode": "contain",
       "backgroundColor": "#1e293b"
     },
@@ -20,7 +20,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
+        "foregroundImage": "./assets/freepik.png",
         "backgroundColor": "#1e293b"
       },
       "package": "com.bustracker.driver",
@@ -33,7 +33,7 @@
       ]
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/freepik.png"
     },
     "plugins": [
       [
@@ -42,10 +42,7 @@
           "locationAlwaysAndWhenInUsePermission": "Allow BusTracker to access your location while using the app."
         }
       ],
-      [
-        "expo-battery",
-        {}
-      ]
+      "expo-asset"
     ],
     "extra": {
       "eas": {
