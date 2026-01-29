@@ -1,0 +1,56 @@
+{
+  "expo": {
+    "name": "BusTracker Driver",
+    "slug": "bustracker-driver",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#1e293b"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTabletMode": false,
+      "bundleIdentifier": "com.bustracker.driver"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1e293b"
+      },
+      "package": "com.bustracker.driver",
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "BATTERY_STATS",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow BusTracker to access your location while using the app."
+        }
+      ],
+      [
+        "expo-battery",
+        {}
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "a0661627-3bc6-463d-9587-467866eca834"
+      }
+    }
+  }
+}

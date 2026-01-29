@@ -1,4 +1,21 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  View,
+  Text,
+  SafeAreaView,
+  TouchableOpacity,
+  ScrollView,
+  TextInput,
+  Modal,
+  StyleSheet,
+  ActivityIndicator,
+  StatusBar,
+  BackHandler,
+} from 'react-native';
+import * as Location from 'expo-location';
+import * as Battery from 'expo-battery';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BusTelemetry, LogEntry } from './types';
 import { pushTelemetry, initializeFirebase } from './services/dataService';
 import { DEFAULT_CONFIG } from './services/firebaseConfig';
@@ -178,17 +195,33 @@ const App: React.FC = () => {
 
   // Battery Monitor
   useEffect(() => {
-    if (navigator.getBattery) {
-      navigator.getBattery().then(battery => {
-        const updateBattery = () => {
-          setBatteryLevel(battery.level * 100);
-          setIsCharging(battery.charging);
-        };
-        updateBattery();
-        battery.onlevelchange = updateBattery;
-        battery.onchargingchange = updateBattery;
-      });
-    }
+    let batteryInterval: NodeJS.Timeout;
+    
+    const updateBattery = async () => {
+      try {
+        const level = await Battery.getBatteryLevelAsync();
+        const isCharging = await Battery.isBatteryChargingAsync();
+        setBatteryLevel(level * 100);
+        setIsCharging(isCharging);
+      } catch (error) {
+        console.warn('Battery API not available:', error);
+        // Fallback to web API if available
+        if (navigator.getBattery) {
+          navigator.getBattery().then((battery: any) => {
+            setBatteryLevel(battery.level * 100);
+            setIsCharging(battery.charging);
+          });
+        }
+      }
+    };
+    
+    // Update battery immediately
+    updateBattery();
+    
+    // Update battery every 5 seconds
+    batteryInterval = setInterval(updateBattery, 5000);
+    
+    return () => clearInterval(batteryInterval);
   }, []);
 
   // Core Logic: Process Position Update
