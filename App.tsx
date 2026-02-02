@@ -22,6 +22,7 @@ import { DEFAULT_CONFIG } from './services/firebaseConfig';
 import { generateAnnouncement } from './services/geminiService';
 import { TelemetryCard } from './components/TelemetryCard';
 import { StatusLog } from './components/StatusLog';
+import 'expo-crypto';
 import { v4 as uuidv4 } from 'uuid';
 
 // Haversine formula to calculate distance in meters
