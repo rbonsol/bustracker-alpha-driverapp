@@ -61,7 +61,7 @@ const App: React.FC = () => {
   // Tracking State
   const [isTracking, setIsTracking] = useState(false);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
-  const watchIdRef = useRef<number | null>(null);
+  const watchIdRef = useRef<Location.LocationSubscription | null>(null);
   
   // Telemetry Logic State
   const lastSentLocationRef = useRef<{lat: number, lng: number} | null>(null);
@@ -291,45 +291,74 @@ const App: React.FC = () => {
 
   // Start/Stop Tracking with watchPosition
   useEffect(() => {
-    if (isTracking) {
-      if (!(navigator as any).geolocation) {
-        setStatusMessage("GPS Not Supported");
-        addLog('error', 'Navigator.geolocation missing');
+  let locationSubscription: Location.LocationSubscription | null = null;
+
+  const startTracking = async () => {
+    try {
+      // 1. Check if services are enabled
+      const enabled = await Location.hasServicesEnabledAsync();
+      if (!enabled) {
+        setStatusMessage("GPS Services Disabled");
+        addLog('error', 'Location services are not enabled on device');
         return;
       }
 
-      addLog('info', 'Starting GPS Watch...');
-      
-      // watchPosition is better for Android background tracking than setInterval
-      watchIdRef.current = (navigator as any).geolocation.watchPosition(
-        processPosition,
-        (error) => {
-          setStatusMessage(`GPS: ${error.message}`);
-          setStatusType('error');
-          addLog('error', `GPS Error ${error.code}: ${error.message}`);
+      // 2. Request Permissions
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        setStatusMessage("Permission Denied");
+        addLog('error', 'Location permission not granted');
+        return;
+      }
+
+      addLog('info', 'Starting Expo Location Watch...');
+      setStatusMessage("Tracking Active");
+      setStatusType('normal');
+
+      // 3. Start Watching (Replaces watchPosition)
+      locationSubscription = await Location.watchPositionAsync(
+        {
+          accuracy: Location.Accuracy.High,
+          timeInterval: 5000,   // Updates every 5 seconds
+          distanceInterval: 10, // Or every 10 meters
         },
-        { 
-          enableHighAccuracy: true, 
-          timeout: 10000, 
-          maximumAge: 0 
+        (location) => {
+          // This maps the Expo location object back to your processPosition handler
+          processPosition(location);
         }
       );
-    } else {
-      if (watchIdRef.current !== null) {
-        (navigator as any).geolocation.clearWatch(watchIdRef.current);
-        watchIdRef.current = null;
-        setStatusMessage("Tracking Paused");
-        setStatusType('normal');
-        addLog('info', 'Tracking Stopped');
-      }
-    }
 
-    return () => {
-      if (watchIdRef.current !== null) {
-        (navigator as any).geolocation.clearWatch(watchIdRef.current);
-      }
-    };
-  }, [isTracking, processPosition, addLog]);
+      // Store the subscription in your ref so it can be cleared
+      watchIdRef.current = locationSubscription;
+
+    } catch (error: any) {
+      setStatusMessage(`GPS: ${error.message}`);
+      setStatusType('error');
+      addLog('error', `GPS Error: ${error.message}`);
+    }
+  };
+
+  if (isTracking) {
+    startTracking();
+  } else {
+    // Stop Tracking logic
+    if (watchIdRef.current) {
+      watchIdRef.current.remove();
+      watchIdRef.current = null;
+      setStatusMessage("Tracking Paused");
+      setStatusType('normal');
+      addLog('info', 'Tracking Stopped');
+    }
+  }
+
+  // Cleanup on unmount
+  return () => {
+    if (watchIdRef.current) {
+      watchIdRef.current.remove();
+      watchIdRef.current = null;
+    }
+  };
+}, [isTracking, processPosition, addLog]);
 
   // Toggle Tracking Handler (with manual Wake Lock trigger)
   const toggleTracking = () => {
