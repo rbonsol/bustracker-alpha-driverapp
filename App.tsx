@@ -22,7 +22,7 @@ import { DEFAULT_CONFIG } from './services/firebaseConfig';
 import { generateAnnouncement } from './services/geminiService';
 import { TelemetryCard } from './components/TelemetryCard';
 import { StatusLog } from './components/StatusLog';
-import 'expo-crypto';
+import * as ExpoCrypto from 'expo-crypto';
 import { v4 as uuidv4 } from 'uuid';
 
 // Haversine formula to calculate distance in meters
@@ -91,7 +91,7 @@ const App: React.FC = () => {
   // Logging Helper
   const addLog = useCallback((type: LogEntry['type'], message: string) => {
     setLogs(prev => [...prev.slice(-49), { // Keep last 50 logs
-      id: uuidv4(),
+      id: ExpoCrypto.randomUUID(),
       timestamp: new Date(),
       type,
       message
